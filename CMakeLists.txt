@@ -39,9 +39,9 @@ pico_enable_stdio_usb(hover-pico 1)
 pico_enable_stdio_uart(hover-pico 0)
 
 # enable line-ending settings for microros
-#add_compile_definitions(PICO_UART_ENABLE_CRLF_SUPPORT=0)
-#add_compile_definitions(PICO_STDIO_ENABLE_CRLF_SUPPORT=0)
-#add_compile_definitions(PICO_STDIO_DEFAULT_CRLF=0)
+add_compile_definitions(PICO_UART_ENABLE_CRLF_SUPPORT=0)
+add_compile_definitions(PICO_STDIO_ENABLE_CRLF_SUPPORT=0)
+add_compile_definitions(PICO_STDIO_DEFAULT_CRLF=0)
 
 # Generate UF2
 pico_add_extra_outputs(hover-pico)
