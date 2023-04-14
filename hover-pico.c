@@ -25,6 +25,7 @@
 const uint LED_PIN = 25;
 
 // counts per rev = 11500
+const double counts_per_rev = 11500.0;
 
 rcl_publisher_t publisher;
 rcl_publisher_t batteryPublisher;
@@ -263,7 +264,6 @@ extern int clock_gettime(clockid_t unused, struct timespec *tp);
 
 void timer_callback(rcl_timer_t *timer, int64_t last_call_time)
 {
-
     new_value1 = quadrature_encoder_get_count(pioEnc, smEnc0);
     delta1 = new_value1 - old_value1;
     old_value1 = new_value1;
@@ -273,19 +273,18 @@ void timer_callback(rcl_timer_t *timer, int64_t last_call_time)
     old_value2 = new_value2;
 
     unsigned long now = clock();
+
     double vel_dt = (now - prev_odom_update) / 1000.0; // seconds
-
     double dtm = (double)(now - prev_odom_update) / (60000.0); // minutes
-    double counts_per_rev = 11500.0;
 
+    prev_odom_update = now;
+    
+    
     double currentRPM_L = (delta1 / counts_per_rev) / dtm;
     double currentRPM_R = (delta2 / counts_per_rev) / dtm;
 
     kinematicsUpdate(currentRPM_L, currentRPM_R);
-
     odomUpdate(vel_dt);
-
-    prev_odom_update = now;
 
     clock_gettime(CLOCK_REALTIME, &ts);
     odom_msg.header.stamp.sec = ts.tv_sec;
@@ -293,8 +292,8 @@ void timer_callback(rcl_timer_t *timer, int64_t last_call_time)
 
     rcl_ret_t odom = rcl_publish(&odomPublisher, &odom_msg, NULL);
 
-    //    speedMsg.header.stamp.sec = ts.tv_sec;
-    //  speedMsg.header.stamp.nanosec = ts.tv_nsec;
+    // speedMsg.header.stamp.sec = ts.tv_sec;
+    // speedMsg.header.stamp.nanosec = ts.tv_nsec;
     // speedMsg.vector.x = delta1;
     // speedMsg.vector.y = delta2;
 
