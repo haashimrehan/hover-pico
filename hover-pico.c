@@ -1,80 +1,83 @@
-#include <time.h>
-#include <string.h>
 #include <stdio.h>
 #include "pico/stdlib.h"
-#include "hardware/pio.h"
+#include <math.h>
+#include <string.h>
+#include <time.h>
 #include "hardware/timer.h"
+#include "hardware/pio.h"
 #include "uart_rx.pio.h"
 #include "uart_tx.pio.h"
 #include "quadrature_encoder.pio.h"
-
+#include <std_msgs/msg/int32.h>
+#include <std_msgs/msg/float64.h>
+#include <geometry_msgs/msg/vector3_stamped.h>
+#include <nav_msgs/msg/odometry.h>
+#include <geometry_msgs/msg/twist.h>
 #include <rcl/rcl.h>
 #include <rcl/error_handling.h>
 #include <rclc/rclc.h>
 #include <rclc/executor.h>
-#include <std_msgs/msg/int32.h>
-#include <std_msgs/msg/int16.h>
-#include <std_msgs/msg/float64.h>
-#include <geometry_msgs/msg/vector3_stamped.h>
-#include <geometry_msgs/msg/vector3.h>
-#include <nav_msgs/msg/odometry.h>
 #include <rmw_microros/rmw_microros.h>
 #include "pico_uart_transports.h"
-#include <math.h>
 
-const uint LED_PIN = 25;
+#define PIO_RX_PIN 1
+#define PIO_TX_PIN 0
+#define LED_PIN 25
+#define COUNTS_PER_REV 11500.0
+#define START_FRAME 0xABCD
+#define SERIAL_BAUD 115200
+#define RIGHT_SLOPE 0.5495
+#define LEFT_SLOPE 0.5375
+#define RIGHT_MIN_SPEED 24 // 48
+#define LEFT_MIN_SPEED 27  // 54
 
-// counts per rev = 11500
-const double counts_per_rev = 11500.0;
+#define WHEELS_Y_DISTANCE 0.525
+#define WHEELS_CIRCUMFERENCE 0.166
+#define MAX_RPM 400
 
+// Publishers
 rcl_publisher_t publisher;
 rcl_publisher_t batteryPublisher;
 rcl_publisher_t speedPublisher;
 rcl_publisher_t odomPublisher;
 
+// Subscriber
+rcl_subscription_t cmd_subscriber;
+
+// Messages
 std_msgs__msg__Int32 msg;
 std_msgs__msg__Float64 batteryMsg;
 geometry_msgs__msg__Vector3Stamped speedMsg;
 nav_msgs__msg__Odometry odom_msg;
+geometry_msgs__msg__Twist twist_msg;
 
-// nav_msgs__msg__Odometry odom_msg_;
+// odom data
 double x_pos = 0.0;
 double y_pos = 0.0;
 double heading = 0.0;
-
 unsigned long prev_odom_update = 0;
+unsigned long prev_cmd_time = 0;
+int new_value1, delta1, old_value1 = 0;
+int new_value2, delta2, old_value2 = 0;
 
-// Global variables
+double leftReqRPM = 0.0;
+double rightReqRPM = 0.0;
+
+// HoverSerial
 uint8_t idx = 0;        // Index for new data pointer
 uint16_t bufStartFrame; // Buffer Start Frame
 unsigned char *p;       // Pointer declaration for the new received data
 unsigned char incomingByte;
 unsigned char incomingBytePrev;
-#define START_FRAME 0xABCD // [-] Start frme definition for reliable serial communication
 
-// state machine
+// PIO state machines
 const uint smEnc0 = 0;
 const uint smEnc1 = 1;
 const uint smTX = 0;
 PIO pioEnc = pio0;
 PIO pioTX = pio1;
-
 PIO pioRX = pio1;
 uint smRX = 1;
-
-#define PIO_RX_PIN 1
-
-int new_value1, delta1, old_value1 = 0;
-int new_value2, delta2, old_value2 = 0;
-
-typedef struct
-{
-    uint16_t start;
-    int16_t steer;
-    int16_t speed;
-    uint16_t checksum;
-} SerialCommand;
-SerialCommand Command;
 
 typedef struct
 {
@@ -274,14 +277,13 @@ void timer_callback(rcl_timer_t *timer, int64_t last_call_time)
 
     unsigned long now = clock();
 
-    double vel_dt = (now - prev_odom_update) / 1000.0; // seconds
+    double vel_dt = (now - prev_odom_update) / 1000.0;         // seconds
     double dtm = (double)(now - prev_odom_update) / (60000.0); // minutes
 
     prev_odom_update = now;
-    
-    
-    double currentRPM_L = (delta1 / counts_per_rev) / dtm;
-    double currentRPM_R = (delta2 / counts_per_rev) / dtm;
+
+    double currentRPM_R = (delta1 / COUNTS_PER_REV) / dtm;
+    double currentRPM_L = (delta2 / COUNTS_PER_REV) / dtm;
 
     kinematicsUpdate(currentRPM_L, currentRPM_R);
     odomUpdate(vel_dt);
@@ -305,6 +307,69 @@ void timer_callback(rcl_timer_t *timer, int64_t last_call_time)
     rcl_ret_t bat = rcl_publish(&batteryPublisher, &batteryMsg, NULL);
 }
 
+void calculateRPM()
+{
+    float tangential_vel = twist_msg.angular.z * (WHEELS_Y_DISTANCE / 2.0);
+
+    // convert m/s to m/min
+    float linear_vel_x_mins = twist_msg.linear.x * 60.0;
+    float linear_vel_y_mins = twist_msg.linear.y * 60.0;
+    // convert rad/s to rad/min
+    float tangential_vel_mins = tangential_vel * 60.0;
+
+    float x_rpm = linear_vel_x_mins / WHEELS_CIRCUMFERENCE;
+    float y_rpm = linear_vel_y_mins / WHEELS_CIRCUMFERENCE;
+    float tan_rpm = tangential_vel_mins / WHEELS_CIRCUMFERENCE;
+
+    float a_x_rpm = fabs(x_rpm);
+    float a_y_rpm = fabs(y_rpm);
+    float a_tan_rpm = fabs(tan_rpm);
+
+    float xy_sum = a_x_rpm + a_y_rpm;
+    float xtan_sum = a_x_rpm + a_tan_rpm;
+
+    // calculate the scale value how much each target velocity
+    // must be scaled down in such cases where the total required RPM
+    // is more than the motor's max RPM
+    // this is to ensure that the required motion is achieved just with slower speed
+    if (xy_sum >= MAX_RPM && twist_msg.angular.z == 0)
+    {
+        float vel_scaler = MAX_RPM / xy_sum;
+
+        x_rpm *= vel_scaler;
+        y_rpm *= vel_scaler;
+    }
+
+    else if (xtan_sum >= MAX_RPM && twist_msg.linear.y == 0)
+    {
+        float vel_scaler = MAX_RPM / xtan_sum;
+
+        x_rpm *= vel_scaler;
+        tan_rpm *= vel_scaler;
+    }
+
+    //    Kinematics::rpm rpm;
+
+    // calculate for the target motor RPM and direction
+    // front-left motor
+
+    leftReqRPM = x_rpm - y_rpm - tan_rpm;
+   // leftReqRPM = constrain(leftReqRPM, -MAX_RPM, MAX_RPM);
+
+    // front-right motor
+    rightReqRPM = x_rpm + y_rpm + tan_rpm;
+    //rightReqRPM = constrain(rightReqRPM, -MAX_RPM, MAX_RPM);
+
+    //  return rpm;
+}
+
+void twistCallback(const void *msgin)
+{
+    gpio_put(LED_PIN, !gpio_get(LED_PIN));
+    // msg.data++;
+    prev_cmd_time = clock();
+}
+
 int main()
 {
     stdio_init_all();
@@ -316,26 +381,11 @@ int main()
     quadrature_encoder_program_init(pioEnc, smEnc0, offset, 16, 0);
     quadrature_encoder_program_init(pioEnc, smEnc1, offset, 14, 0);
 
-    const uint PIN_TX = 0;
-    // This is the same as the default UART baud rate on Pico
-    const uint SERIAL_BAUD = 115200;
-
-    uint offset2 = pio_add_program(pioTX, &uart_tx_program);
-    uart_tx_program_init(pioTX, smTX, offset2, PIN_TX, SERIAL_BAUD);
-
-    Command.start = (uint16_t)0xABCD;
-    Command.steer = (int16_t)0;
-    Command.speed = (int16_t)150;
-    Command.checksum = (uint16_t)(Command.start ^ Command.steer ^ Command.speed);
-
-    unsigned long iTimeSend = 0;
-    int iTest = 0;
-    int iStep = 5;
+    uint offsetTX = pio_add_program(pioTX, &uart_tx_program);
+    uart_tx_program_init(pioTX, smTX, offsetTX, PIO_TX_PIN, SERIAL_BAUD);
 
     uint offsetRX = pio_add_program(pioRX, &uart_rx_program);
     uart_rx_program_init(pioRX, smRX, offsetRX, PIO_RX_PIN, SERIAL_BAUD);
-
-    //    sleep_ms(1000);
 
     clock_t currentTime = clock();
     unsigned long lastSendTime = clock();
@@ -407,13 +457,31 @@ int main()
         RCL_MS_TO_NS(100),
         timer_callback);
 
-    rclc_executor_init(&executor, &support.context, 1, &allocator);
+    rclc_subscription_init_default(
+        &cmd_subscriber,
+        &node,
+        ROSIDL_GET_MSG_TYPE_SUPPORT(geometry_msgs, msg, Twist),
+        "cmd_vel");
+
+    executor = rclc_executor_get_zero_initialized_executor();
+    rclc_executor_init(&executor, &support.context, 2, &allocator);
+
+    rclc_executor_add_subscription(
+        &executor,
+        &cmd_subscriber,
+        &twist_msg,
+        &twistCallback,
+        ON_NEW_DATA);
+
     rclc_executor_add_timer(&executor, &timer);
 
     gpio_put(LED_PIN, 1);
 
     batteryMsg.data = 0;
     msg.data = 0;
+    twist_msg.linear.x = 0.0;
+    twist_msg.linear.y = 0.0;
+    twist_msg.angular.z = 0.0;
 
     while (1)
     {
@@ -421,9 +489,28 @@ int main()
 
         Receive();
         currentTime = clock();
+
+        // brake if there's no command received, or when it's only the first command sent
+        /*if (((clock() - prev_cmd_time) >= 200))
+        {
+            twist_msg.linear.x = 0.0;
+            twist_msg.linear.y = 0.0;
+            twist_msg.angular.z = 0.0;
+            Send(0, 0);
+            gpio_put(LED_PIN, 1);
+        }*/
+
         if (clock() - lastSendTime >= 100)
         {
-            Send(0, 0);
+            // convert twist to rpm
+           calculateRPM();
+
+            // convert RPM to CMD
+            int leftCmd = (leftReqRPM / LEFT_SLOPE) + RIGHT_MIN_SPEED;
+            int rightCmd = (rightReqRPM / RIGHT_SLOPE) + LEFT_MIN_SPEED;
+
+            Send(leftCmd, rightCmd);
+//            Send(0,0);
             lastSendTime = currentTime;
         }
     }
