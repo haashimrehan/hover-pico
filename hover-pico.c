@@ -170,7 +170,7 @@ void Receive()
         }
         else
         {
-            printf("Non-valid data skipped");
+            //printf("Non-valid data skipped");
         }
         idx = 0; // Reset the index (it prevents to enter in this if condition in the next cycle)
     }
@@ -282,8 +282,8 @@ void timer_callback(rcl_timer_t *timer, int64_t last_call_time)
 
     prev_odom_update = now;
 
-    double currentRPM_R = (delta1 / COUNTS_PER_REV) / dtm;
-    double currentRPM_L = (delta2 / COUNTS_PER_REV) / dtm;
+    double currentRPM_R = (-delta1 / COUNTS_PER_REV) / dtm;
+    double currentRPM_L = (-delta2 / COUNTS_PER_REV) / dtm;
 
     kinematicsUpdate(currentRPM_L, currentRPM_R);
     odomUpdate(vel_dt);
@@ -291,6 +291,11 @@ void timer_callback(rcl_timer_t *timer, int64_t last_call_time)
     clock_gettime(CLOCK_REALTIME, &ts);
     odom_msg.header.stamp.sec = ts.tv_sec;
     odom_msg.header.stamp.nanosec = ts.tv_nsec;
+    odom_msg.header.frame_id.data = "base_footprint";
+    odom_msg.header.frame_id.size = strlen(odom_msg.header.frame_id.data);
+//    odom_msg.header.child_frame_id.data = "base_link";
+//    odom_msg.header.child_frame_id.size = strlen(odom_msg.header.child_frame_id.data);
+
 
     rcl_ret_t odom = rcl_publish(&odomPublisher, &odom_msg, NULL);
 
@@ -491,14 +496,14 @@ int main()
         currentTime = clock();
 
         // brake if there's no command received, or when it's only the first command sent
-        /*if (((clock() - prev_cmd_time) >= 200))
+        if (((clock() - prev_cmd_time) >= 1000))
         {
             twist_msg.linear.x = 0.0;
             twist_msg.linear.y = 0.0;
             twist_msg.angular.z = 0.0;
             Send(0, 0);
             gpio_put(LED_PIN, 1);
-        }*/
+        }
 
         if (clock() - lastSendTime >= 100)
         {
