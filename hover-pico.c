@@ -375,6 +375,16 @@ void twistCallback(const void *msgin)
     prev_cmd_time = clock();
 }
 
+int getSign(int number) {
+    if (number > 0) {
+        return 1;  // Positive number
+    } else if (number < 0) {
+        return -1; // Negative number
+    } else {
+        return 0;  // Zero
+    }
+}
+
 int main()
 {
     stdio_init_all();
@@ -511,8 +521,8 @@ int main()
            calculateRPM();
 
             // convert RPM to CMD
-            int leftCmd = (leftReqRPM / LEFT_SLOPE) + RIGHT_MIN_SPEED;
-            int rightCmd = (rightReqRPM / RIGHT_SLOPE) + LEFT_MIN_SPEED;
+            int leftCmd = (leftReqRPM / LEFT_SLOPE) + (getSign(leftReqRPM)*RIGHT_MIN_SPEED);
+            int rightCmd = (rightReqRPM / RIGHT_SLOPE) + (getSign(rightReqRPM)*LEFT_MIN_SPEED);
 
             Send(leftCmd, rightCmd);
 //            Send(0,0);
