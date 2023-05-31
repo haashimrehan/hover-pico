@@ -28,11 +28,11 @@
 #define SERIAL_BAUD 115200
 #define RIGHT_SLOPE 0.5495
 #define LEFT_SLOPE 0.5375
-#define RIGHT_MIN_SPEED 24 // 48
-#define LEFT_MIN_SPEED 27  // 54
+#define RIGHT_MIN_SPEED 46 // 24+22  // 48
+#define LEFT_MIN_SPEED 49  // 27+22  // 54
 
-#define WHEELS_Y_DISTANCE 0.525
-#define WHEELS_CIRCUMFERENCE 0.166
+#define WHEELS_Y_DISTANCE 0.53
+#define WHEELS_CIRCUMFERENCE 0.5432
 #define MAX_RPM 400
 
 // Publishers
@@ -41,13 +41,12 @@ rcl_publisher_t batteryPublisher;
 rcl_publisher_t speedPublisher;
 rcl_publisher_t odomPublisher;
 
-// Subscriber
+// Subscribers
 rcl_subscription_t cmd_subscriber;
 
 // Messages
 std_msgs__msg__Int32 msg;
 std_msgs__msg__Float64 batteryMsg;
-geometry_msgs__msg__Vector3Stamped speedMsg;
 nav_msgs__msg__Odometry odom_msg;
 geometry_msgs__msg__Twist twist_msg;
 
@@ -170,7 +169,7 @@ void Receive()
         }
         else
         {
-            //printf("Non-valid data skipped");
+            // printf("Non-valid data skipped");
         }
         idx = 0; // Reset the index (it prevents to enter in this if condition in the next cycle)
     }
@@ -196,22 +195,18 @@ const void euler_to_quat(float roll, float pitch, float yaw, float *q)
 
 void kinematicsUpdate(float rpm1, float rpm2)
 {
-    // Kinematics::velocities vel;
-    float wheel_circumference_ = 0.16;
-    float wheels_y_distance_ = 0.32;
-
     float average_rps_x;
     float average_rps_a;
 
     // convert average revolutions per minute to revolutions per second
     average_rps_x = ((float)(rpm1 + rpm2) / 2) / 60.0;           // RPM
-    current_vel.linear_x = average_rps_x * wheel_circumference_; // m/s
+    current_vel.linear_x = average_rps_x * WHEELS_CIRCUMFERENCE; // m/s
 
     current_vel.linear_y = 0;
 
     // convert average revolutions per minute to revolutions per second
     average_rps_a = ((float)(-rpm1 + rpm2) / 2) / 60.0;
-    current_vel.angular_z = (average_rps_a * wheel_circumference_) / (wheels_y_distance_ / 2.0); //  rad/s
+    current_vel.angular_z = (average_rps_a * WHEELS_CIRCUMFERENCE) / (WHEELS_Y_DISTANCE / 2.0); //  rad/s
 }
 
 void odomUpdate(float vel_dt)
@@ -293,18 +288,11 @@ void timer_callback(rcl_timer_t *timer, int64_t last_call_time)
     odom_msg.header.stamp.nanosec = ts.tv_nsec;
     odom_msg.header.frame_id.data = "base_footprint";
     odom_msg.header.frame_id.size = strlen(odom_msg.header.frame_id.data);
-//    odom_msg.header.child_frame_id.data = "base_link";
-//    odom_msg.header.child_frame_id.size = strlen(odom_msg.header.child_frame_id.data);
-
+    // odom_msg.header.child_frame_id.data = "base_link";
+    // odom_msg.header.child_frame_id.size = strlen(odom_msg.header.child_frame_id.data);
 
     rcl_ret_t odom = rcl_publish(&odomPublisher, &odom_msg, NULL);
 
-    // speedMsg.header.stamp.sec = ts.tv_sec;
-    // speedMsg.header.stamp.nanosec = ts.tv_nsec;
-    // speedMsg.vector.x = delta1;
-    // speedMsg.vector.y = delta2;
-
-    //  rcl_ret_t speed = rcl_publish(&speedPublisher, &speedMsg, NULL);
     msg.data = currentRPM_L;
     rcl_ret_t test = rcl_publish(&publisher, &msg, NULL);
 
@@ -353,36 +341,30 @@ void calculateRPM()
         tan_rpm *= vel_scaler;
     }
 
-    //    Kinematics::rpm rpm;
-
     // calculate for the target motor RPM and direction
-    // front-left motor
 
     leftReqRPM = x_rpm - y_rpm - tan_rpm;
-   // leftReqRPM = constrain(leftReqRPM, -MAX_RPM, MAX_RPM);
-
-    // front-right motor
     rightReqRPM = x_rpm + y_rpm + tan_rpm;
-    //rightReqRPM = constrain(rightReqRPM, -MAX_RPM, MAX_RPM);
 
-    //  return rpm;
+    // leftReqRPM = constrain(leftReqRPM, -MAX_RPM, MAX_RPM);
+    // rightReqRPM = constrain(rightReqRPM, -MAX_RPM, MAX_RPM);
 }
 
 void twistCallback(const void *msgin)
 {
     gpio_put(LED_PIN, !gpio_get(LED_PIN));
-    // msg.data++;
     prev_cmd_time = clock();
+    // msg.data++;
 }
 
-int getSign(int number) {
-    if (number > 0) {
-        return 1;  // Positive number
-    } else if (number < 0) {
+int getSign(int number)
+{
+    if (number > 0)
+        return 1; // Positive number
+    else if (number < 0)
         return -1; // Negative number
-    } else {
-        return 0;  // Zero
-    }
+    else
+        return 0; // Zero
 }
 
 int main()
@@ -518,14 +500,14 @@ int main()
         if (clock() - lastSendTime >= 100)
         {
             // convert twist to rpm
-           calculateRPM();
+            calculateRPM();
 
             // convert RPM to CMD
-            int leftCmd = (leftReqRPM / LEFT_SLOPE) + (getSign(leftReqRPM)*RIGHT_MIN_SPEED);
-            int rightCmd = (rightReqRPM / RIGHT_SLOPE) + (getSign(rightReqRPM)*LEFT_MIN_SPEED);
+            int leftCmd = (leftReqRPM / LEFT_SLOPE) + (getSign(leftReqRPM) * RIGHT_MIN_SPEED);
+            int rightCmd = (rightReqRPM / RIGHT_SLOPE) + (getSign(rightReqRPM) * LEFT_MIN_SPEED);
 
             Send(leftCmd, rightCmd);
-//            Send(0,0);
+
             lastSendTime = currentTime;
         }
     }
