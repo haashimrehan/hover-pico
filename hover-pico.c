@@ -238,9 +238,9 @@ void odomUpdate(float vel_dt)
     odom_msg.pose.pose.orientation.z = (double)q[3];
     odom_msg.pose.pose.orientation.w = (double)q[0];
 
-    odom_msg.pose.covariance[0] = 0.001;
-    odom_msg.pose.covariance[7] = 0.001;
-    odom_msg.pose.covariance[35] = 0.001;
+    odom_msg.pose.covariance[0] = 0.1;
+    odom_msg.pose.covariance[7] = 0.1;
+    odom_msg.pose.covariance[35] = 0.1;
 
     // linear speed from encoders
     odom_msg.twist.twist.linear.x = current_vel.linear_x;
@@ -252,9 +252,9 @@ void odomUpdate(float vel_dt)
     odom_msg.twist.twist.angular.y = 0.0;
     odom_msg.twist.twist.angular.z = current_vel.angular_z;
 
-    odom_msg.twist.covariance[0] = 0.0001;
-    odom_msg.twist.covariance[7] = 0.0001;
-    odom_msg.twist.covariance[35] = 0.0001;
+    odom_msg.twist.covariance[0] = 0.005;
+    odom_msg.twist.covariance[7] = 0.005;
+    odom_msg.twist.covariance[35] = 0.005;
 }
 
 struct timespec ts;
@@ -263,11 +263,10 @@ extern int clock_gettime(clockid_t unused, struct timespec *tp);
 void timer_callback(rcl_timer_t *timer, int64_t last_call_time)
 {
     new_value1 = quadrature_encoder_get_count(pioEnc, smEnc0);
-    delta1 = new_value1 - old_value1;
-    old_value1 = new_value1;
-
     new_value2 = quadrature_encoder_get_count(pioEnc, smEnc1);
+    delta1 = new_value1 - old_value1;
     delta2 = new_value2 - old_value2;
+    old_value1 = new_value1;
     old_value2 = new_value2;
 
     unsigned long now = clock();
