@@ -28,18 +28,15 @@
 #define SERIAL_BAUD 115200
 #define RIGHT_SLOPE 0.5495
 #define LEFT_SLOPE 0.5375
-#define RIGHT_MIN_SPEED 46 // 24+22  // 48
-#define LEFT_MIN_SPEED 49  // 27+22  // 54
+#define RIGHT_MIN_SPEED 46
+#define LEFT_MIN_SPEED 49
 
 #define WHEELS_Y_DISTANCE 0.53
 #define WHEELS_CIRCUMFERENCE 0.5432
 #define MAX_RPM 400
 
 // Publishers
-rcl_publisher_t publisher;
-rcl_publisher_t batteryPublisher;
-rcl_publisher_t speedPublisher;
-rcl_publisher_t odomPublisher;
+rcl_publisher_t publisher, batteryPublisher, speedPublisher, odomPublisher;
 
 // Subscribers
 rcl_subscription_t cmd_subscriber;
@@ -51,32 +48,25 @@ nav_msgs__msg__Odometry odom_msg;
 geometry_msgs__msg__Twist twist_msg;
 
 // odom data
-double x_pos = 0.0;
-double y_pos = 0.0;
-double heading = 0.0;
-unsigned long prev_odom_update = 0;
-unsigned long prev_cmd_time = 0;
-int new_value1, delta1, old_value1 = 0;
-int new_value2, delta2, old_value2 = 0;
-
-double leftReqRPM = 0.0;
-double rightReqRPM = 0.0;
+double x_pos, y_pos, heading = 0.0;
+double leftReqRPM, rightReqRPM = 0.0;
+unsigned long prev_odom_update, prev_cmd_time = 0;
+int new_value1, delta1, old_value1, new_value2, delta2, old_value2 = 0;
 
 // HoverSerial
 uint8_t idx = 0;        // Index for new data pointer
 uint16_t bufStartFrame; // Buffer Start Frame
 unsigned char *p;       // Pointer declaration for the new received data
-unsigned char incomingByte;
-unsigned char incomingBytePrev;
+unsigned char incomingByte, incomingBytePrev;
 
 // PIO state machines
 const uint smEnc0 = 0;
 const uint smEnc1 = 1;
 const uint smTX = 0;
+const uint smRX = 1;
 PIO pioEnc = pio0;
 PIO pioTX = pio1;
 PIO pioRX = pio1;
-uint smRX = 1;
 
 typedef struct
 {
@@ -305,45 +295,16 @@ void calculateRPM()
 
     // convert m/s to m/min
     float linear_vel_x_mins = twist_msg.linear.x * 60.0;
-    float linear_vel_y_mins = twist_msg.linear.y * 60.0;
+
     // convert rad/s to rad/min
     float tangential_vel_mins = tangential_vel * 60.0;
 
     float x_rpm = linear_vel_x_mins / WHEELS_CIRCUMFERENCE;
-    float y_rpm = linear_vel_y_mins / WHEELS_CIRCUMFERENCE;
     float tan_rpm = tangential_vel_mins / WHEELS_CIRCUMFERENCE;
 
-    float a_x_rpm = fabs(x_rpm);
-    float a_y_rpm = fabs(y_rpm);
-    float a_tan_rpm = fabs(tan_rpm);
-
-    float xy_sum = a_x_rpm + a_y_rpm;
-    float xtan_sum = a_x_rpm + a_tan_rpm;
-
-    // calculate the scale value how much each target velocity
-    // must be scaled down in such cases where the total required RPM
-    // is more than the motor's max RPM
-    // this is to ensure that the required motion is achieved just with slower speed
-    if (xy_sum >= MAX_RPM && twist_msg.angular.z == 0)
-    {
-        float vel_scaler = MAX_RPM / xy_sum;
-
-        x_rpm *= vel_scaler;
-        y_rpm *= vel_scaler;
-    }
-
-    else if (xtan_sum >= MAX_RPM && twist_msg.linear.y == 0)
-    {
-        float vel_scaler = MAX_RPM / xtan_sum;
-
-        x_rpm *= vel_scaler;
-        tan_rpm *= vel_scaler;
-    }
-
     // calculate for the target motor RPM and direction
-
-    leftReqRPM = x_rpm - y_rpm - tan_rpm;
-    rightReqRPM = x_rpm + y_rpm + tan_rpm;
+    leftReqRPM = x_rpm - tan_rpm;
+    rightReqRPM = x_rpm + tan_rpm;
 
     // leftReqRPM = constrain(leftReqRPM, -MAX_RPM, MAX_RPM);
     // rightReqRPM = constrain(rightReqRPM, -MAX_RPM, MAX_RPM);
