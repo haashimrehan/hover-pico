@@ -62,3 +62,4 @@ cmake-*
 hover-picoBACKUP.c
 rx.txt
 
+.vscode/settings.json

@@ -14,6 +14,7 @@ link_directories(libmicroros)
 add_executable(hover-pico
   hover-pico.c
   pico_uart_transport.c
+  pid_controller.c
 )
 
 pico_generate_pio_header(hover-pico ${CMAKE_CURRENT_LIST_DIR}/quadrature_encoder.pio)
