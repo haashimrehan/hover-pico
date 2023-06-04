@@ -37,7 +37,7 @@
 #define MAX_RPM 400
 
 #define KP 0.5
-#define KI 10.0
+#define KI 5.0
 #define KD 0.0
 #define DT 0.02
 
@@ -501,25 +501,19 @@ int main()
                 // convert twist to rpm
                 calculateRPM();
 
-
                 pid_ctrl_ptr_right->setpoint = rightReqRPM;
                 pid_ctrl_ptr_left->setpoint = leftReqRPM;
                 pid_ctrl_ptr_right->measured = currentRPM_R;
                 pid_ctrl_ptr_left->measured = currentRPM_L;
 
-                int leftCmd = PID_Compute(curr_time, pid_ctrl_ptr_left);
-                int rightCmd = PID_Compute(curr_time, pid_ctrl_ptr_right);
+                int leftPIDCmd = PID_Compute(curr_time, pid_ctrl_ptr_left);
+                int rightPIDCmd = PID_Compute(curr_time, pid_ctrl_ptr_right);
+
+                int leftCmd = (leftPIDCmd / LEFT_SLOPE) + (getSign(leftReqRPM) * RIGHT_MIN_SPEED);
+                int rightCmd = (rightPIDCmd / RIGHT_SLOPE) + (getSign(rightReqRPM) * LEFT_MIN_SPEED);
 
                 wheel_speed_msg.linear.z = leftCmd;
                 wheel_speed_msg.angular.z = rightCmd;
-
-                // current
-                // required
-                // cmd
-
-                // convert RPM to CMD
-                // int leftCmd = (leftReqRPM / LEFT_SLOPE) + (getSign(leftReqRPM) * RIGHT_MIN_SPEED);
-                // int rightCmd = (rightReqRPM / RIGHT_SLOPE) + (getSign(rightReqRPM) * LEFT_MIN_SPEED);
 
                 Send(leftCmd, rightCmd);
 
