@@ -19,6 +19,7 @@
 #include <rclc/executor.h>
 #include <rmw_microros/rmw_microros.h>
 #include "pico_uart_transports.h"
+#include "pid_controller.h"
 
 #define PIO_RX_PIN 1
 #define PIO_TX_PIN 0
@@ -35,6 +36,13 @@
 #define WHEELS_CIRCUMFERENCE 0.5432
 #define MAX_RPM 400
 
+#define KP 0.5
+#define KI 10.0
+#define KD 0.0
+#define DT 0.02
+
+PID pid_control_left, pid_control_right, *pid_ctrl_ptr_left, *pid_ctrl_ptr_right;
+
 // Publishers
 rcl_publisher_t publisher, batteryPublisher, speedPublisher, odomPublisher;
 
@@ -46,10 +54,12 @@ std_msgs__msg__Int32 msg;
 std_msgs__msg__Float64 batteryMsg;
 nav_msgs__msg__Odometry odom_msg;
 geometry_msgs__msg__Twist twist_msg;
+geometry_msgs__msg__Twist wheel_speed_msg;
 
 // odom data
 double x_pos, y_pos, heading = 0.0;
 double leftReqRPM, rightReqRPM = 0.0;
+double currentRPM_R, currentRPM_L = 0.0;
 unsigned long prev_odom_update, prev_cmd_time = 0;
 int new_value1, delta1, old_value1, new_value2, delta2, old_value2 = 0;
 
@@ -58,6 +68,8 @@ uint8_t idx = 0;        // Index for new data pointer
 uint16_t bufStartFrame; // Buffer Start Frame
 unsigned char *p;       // Pointer declaration for the new received data
 unsigned char incomingByte, incomingBytePrev;
+
+bool sleep = true;
 
 // PIO state machines
 const uint smEnc0 = 0;
@@ -194,7 +206,6 @@ void kinematicsUpdate(float rpm1, float rpm2)
 
     current_vel.linear_y = 0;
 
-    // convert average revolutions per minute to revolutions per second
     average_rps_a = ((float)(-rpm1 + rpm2) / 2) / 60.0;
     current_vel.angular_z = (average_rps_a * WHEELS_CIRCUMFERENCE) / (WHEELS_Y_DISTANCE / 2.0); //  rad/s
 }
@@ -266,8 +277,11 @@ void timer_callback(rcl_timer_t *timer, int64_t last_call_time)
 
     prev_odom_update = now;
 
-    double currentRPM_R = (-delta1 / COUNTS_PER_REV) / dtm;
-    double currentRPM_L = (-delta2 / COUNTS_PER_REV) / dtm;
+    currentRPM_R = (-delta1 / COUNTS_PER_REV) / dtm;
+    currentRPM_L = (-delta2 / COUNTS_PER_REV) / dtm;
+
+    wheel_speed_msg.linear.x = currentRPM_L;
+    wheel_speed_msg.angular.x = currentRPM_R;
 
     kinematicsUpdate(currentRPM_L, currentRPM_R);
     odomUpdate(vel_dt);
@@ -281,6 +295,7 @@ void timer_callback(rcl_timer_t *timer, int64_t last_call_time)
     // odom_msg.header.child_frame_id.size = strlen(odom_msg.header.child_frame_id.data);
 
     rcl_ret_t odom = rcl_publish(&odomPublisher, &odom_msg, NULL);
+    rcl_ret_t wheel_speed = rcl_publish(&speedPublisher, &wheel_speed_msg, NULL);
 
     msg.data = currentRPM_L;
     rcl_ret_t test = rcl_publish(&publisher, &msg, NULL);
@@ -308,12 +323,16 @@ void calculateRPM()
 
     // leftReqRPM = constrain(leftReqRPM, -MAX_RPM, MAX_RPM);
     // rightReqRPM = constrain(rightReqRPM, -MAX_RPM, MAX_RPM);
+
+    wheel_speed_msg.linear.y = leftReqRPM;
+    wheel_speed_msg.angular.y = rightReqRPM;
 }
 
 void twistCallback(const void *msgin)
 {
     gpio_put(LED_PIN, !gpio_get(LED_PIN));
     prev_cmd_time = clock();
+    sleep = false;
     // msg.data++;
 }
 
@@ -330,6 +349,12 @@ int getSign(int number)
 int main()
 {
     stdio_init_all();
+
+    PID_Coefficents(&pid_control_right, KP, KI, KD, DT, 1000);
+    PID_Coefficents(&pid_control_left, KP, KI, KD, DT, 1000);
+
+    pid_ctrl_ptr_right = &pid_control_right;
+    pid_ctrl_ptr_left = &pid_control_left;
 
     uint offset = pio_add_program(pioEnc, &quadrature_encoder_program);
 
@@ -399,7 +424,7 @@ int main()
     rclc_publisher_init_default(
         &speedPublisher,
         &node,
-        ROSIDL_GET_MSG_TYPE_SUPPORT(geometry_msgs, msg, Vector3Stamped),
+        ROSIDL_GET_MSG_TYPE_SUPPORT(geometry_msgs, msg, Twist),
         "hover_speed");
 
     rclc_publisher_init_default(
@@ -446,29 +471,60 @@ int main()
 
         Receive();
         currentTime = clock();
+        absolute_time_t curr_time = get_absolute_time();
 
-        // brake if there's no command received, or when it's only the first command sent
-        if (((clock() - prev_cmd_time) >= 1000))
+        // brake if there's no command received
+        if (((clock() - prev_cmd_time) >= 500))
+            sleep = true;
+
+        if (clock() - lastSendTime >= 20) // 50 hz
         {
-            twist_msg.linear.x = 0.0;
-            twist_msg.linear.y = 0.0;
-            twist_msg.angular.z = 0.0;
-            Send(0, 0);
-            gpio_put(LED_PIN, 1);
-        }
+            if (sleep)
+            {
+                pid_ctrl_ptr_right->setpoint = 0;
+                pid_ctrl_ptr_left->setpoint = 0;
+                pid_ctrl_ptr_right->measured = currentRPM_R;
+                pid_ctrl_ptr_left->measured = currentRPM_L;
 
-        if (clock() - lastSendTime >= 100)
-        {
-            // convert twist to rpm
-            calculateRPM();
+                PID_Compute(curr_time, pid_ctrl_ptr_left);
+                PID_Compute(curr_time, pid_ctrl_ptr_right);
 
-            // convert RPM to CMD
-            int leftCmd = (leftReqRPM / LEFT_SLOPE) + (getSign(leftReqRPM) * RIGHT_MIN_SPEED);
-            int rightCmd = (rightReqRPM / RIGHT_SLOPE) + (getSign(rightReqRPM) * LEFT_MIN_SPEED);
+                twist_msg.linear.x = 0.0;
+                twist_msg.linear.y = 0.0;
+                twist_msg.angular.z = 0.0;
 
-            Send(leftCmd, rightCmd);
+                Send(0, 0);
+                gpio_put(LED_PIN, 1);
+            }
+            else
+            {
+                // convert twist to rpm
+                calculateRPM();
 
-            lastSendTime = currentTime;
+
+                pid_ctrl_ptr_right->setpoint = rightReqRPM;
+                pid_ctrl_ptr_left->setpoint = leftReqRPM;
+                pid_ctrl_ptr_right->measured = currentRPM_R;
+                pid_ctrl_ptr_left->measured = currentRPM_L;
+
+                int leftCmd = PID_Compute(curr_time, pid_ctrl_ptr_left);
+                int rightCmd = PID_Compute(curr_time, pid_ctrl_ptr_right);
+
+                wheel_speed_msg.linear.z = leftCmd;
+                wheel_speed_msg.angular.z = rightCmd;
+
+                // current
+                // required
+                // cmd
+
+                // convert RPM to CMD
+                // int leftCmd = (leftReqRPM / LEFT_SLOPE) + (getSign(leftReqRPM) * RIGHT_MIN_SPEED);
+                // int rightCmd = (rightReqRPM / RIGHT_SLOPE) + (getSign(rightReqRPM) * LEFT_MIN_SPEED);
+
+                Send(leftCmd, rightCmd);
+
+                lastSendTime = currentTime;
+            }
         }
     }
 }
